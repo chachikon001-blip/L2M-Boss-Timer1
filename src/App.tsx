@@ -1,15 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import {
-  Boss,
-  ServerFilterType,
-  ServerConfig,
-  FilterType,
-  SortType,
-  SoundSettings,
-  DiscordSettings,
-  GuildActivity,
-  RebootOffsetRule,
-} from './types';
+import { ServerFilterType, ServerConfig, FilterType, SortType, SoundSettings, DiscordSettings, GuildActivity, RebootOffsetRule } from './types';
 import { INITIAL_BOSSES } from './data/defaultBosses';
 import { DEFAULT_ACTIVITIES } from './data/defaultActivities';
 import { BossTableRow } from './components/BossTableRow';
@@ -23,30 +13,8 @@ import { DiscordModal } from './components/DiscordModal';
 import { VoiceSettingsModal } from './components/VoiceSettingsModal';
 import { soundManager } from './utils/audio';
 import { getBossStatus } from './utils/format';
-import {
-  Swords,
-  Clock,
-  Table,
-  LayoutGrid,
-  Volume2,
-  VolumeX,
-  Bell,
-  RotateCw,
-  Plus,
-  Search,
-  Star,
-  Calendar,
-  Castle,
-  Globe,
-  CheckCircle2,
-  Settings2,
-  Check,
-} from 'lucide-react';
-
-const LOCAL_SOUND_KEY = 'l2m_sound_settings_v3';
-const DISCORD_WEBHOOK_KEY = 'l2m_discord_webhook_url';
-const DISCORD_SETTINGS_KEY = 'l2m_discord_settings_v3';
-
+import { db } from './firebase';
+import { Swords, Clock, Table, LayoutGrid, Volume2, VolumeX, Bell, RotateCw, Plus, Search, Star, Calendar, Castle, Globe, CheckCircle2, Settings2, Check, Share2 } from 'lucide-react';
 const DEFAULT_DISCORD_SETTINGS: DiscordSettings = {
   enabled: false,
   webhookUrl: '',
@@ -213,14 +181,79 @@ export default function App() {
           // ignore
         }
       };
+      // Real-time Firebase Database Synchronization
+      let unsubscribeFirebase: (() => void) | null = null;
+      try {
+        const bossesRef = ref(db, 'bosses');
+        unsubscribeFirebase = onValue(
+          bossesRef,
+          (snapshot) => {
+            const val = snapshot.val();
+            if (val) {
+              const list: Boss[] = Array.isArray(val) ? val : Object.values(val);
+              if (list && list.length > 0) {
+                setBosses(list);
+              }
+            }
+          },
+          (error) => {
+            console.warn('Firebase sync note:', error?.message);
+          }
+        );
+      } catch (err) {
+        console.warn('Firebase init warning:', err);
+      }
+
+      return () => {
+        if (eventSource) eventSource.close();
+        if (unsubscribeFirebase) unsubscribeFirebase();
+      };
     } catch {
       // ignore
     }
-
-    return () => {
-      if (eventSource) eventSource.close();
-    };
   }, []);
+
+  // Sync a single boss to backend server and Firebase Realtime Database
+  const syncBossUpdate = async (updatedBoss: Boss) => {
+    try {
+      await fetch('/api/bosses/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ boss: updatedBoss }),
+      });
+    } catch (e) {
+      console.error('Failed to sync boss update to server:', e);
+    }
+
+    try {
+      await set(ref(db, `bosses/${updatedBoss.id}`), updatedBoss);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Sync entire bosses list to backend server and Firebase Realtime Database
+  const syncAllBosses = async (bossList: Boss[]) => {
+    try {
+      await fetch('/api/bosses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bosses: bossList }),
+      });
+    } catch (e) {
+      console.error('Failed to sync all bosses to server:', e);
+    }
+
+    try {
+      const bossesObj = bossList.reduce((acc: any, b) => {
+        acc[b.id] = b;
+        return acc;
+      }, {});
+      await set(ref(db, 'bosses'), bossesObj);
+    } catch {
+      // ignore
+    }
+  };
 
   // Update server config
   const handleUpdateServerConfig = async (newConfig: Partial<ServerConfig>) => {
@@ -482,15 +515,7 @@ export default function App() {
       showToast(`🔄 อัปเดตรอบเกิด ${targetBoss.thaiName} แล้ว (+${targetBoss.cooldownHours} ชม.)`);
     }
 
-    try {
-      await fetch('/api/bosses/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ boss: updatedBoss }),
-      });
-    } catch (e) {
-      console.error('Failed to sync boss update:', e);
-    }
+    syncBossUpdate(updatedBoss);
   };
 
   // Direct change respawn time from main page
@@ -509,15 +534,7 @@ export default function App() {
       };
       setBosses((prev) => prev.map((b) => (b.id === bossId ? updatedBoss : b)));
       showToast(`🕒 รีเซ็ตเวลา ${targetBoss.thaiName} เป็น --:-- แล้ว`);
-      try {
-        await fetch('/api/bosses/update', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ boss: updatedBoss }),
-        });
-      } catch (e) {
-        console.error('Failed to sync time reset:', e);
-      }
+      syncBossUpdate(updatedBoss);
       return;
     }
 
@@ -534,15 +551,7 @@ export default function App() {
       };
       setBosses((prev) => prev.map((b) => (b.id === bossId ? updatedBoss : b)));
       showToast(`🕒 สิ้นสุดเวลา Invasion (00:00) รีเซ็ต ${targetBoss.thaiName} เป็น --:--`);
-      try {
-        await fetch('/api/bosses/update', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ boss: updatedBoss }),
-        });
-      } catch (e) {
-        console.error('Failed to sync time reset:', e);
-      }
+      syncBossUpdate(updatedBoss);
       return;
     }
 
@@ -569,15 +578,7 @@ export default function App() {
         };
         setBosses((prev) => prev.map((b) => (b.id === bossId ? updatedBoss : b)));
         showToast(`🕒 เวลาเกิน 00:00 แล้ว รีเซ็ต ${targetBoss.thaiName} เป็น --:--`);
-        try {
-          await fetch('/api/bosses/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ boss: updatedBoss }),
-          });
-        } catch (e) {
-          console.error('Failed to sync time reset:', e);
-        }
+        syncBossUpdate(updatedBoss);
         return;
       }
     }
@@ -600,15 +601,7 @@ export default function App() {
       showToast(`🕒 ตั้งเวลาเกิด ${targetBoss.thaiName} เป็น ${timeString} น. เรียบร้อย`);
     }
 
-    try {
-      await fetch('/api/bosses/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ boss: updatedBoss }),
-      });
-    } catch (e) {
-      console.error('Failed to sync direct time change:', e);
-    }
+    syncBossUpdate(updatedBoss);
   };
 
   // Quick Time set (Respawn or Kill)
@@ -630,32 +623,14 @@ export default function App() {
 
     setBosses((prev) => prev.map((b) => (b.id === bossId ? updatedBoss : b)));
     showToast(`🕒 ตั้งเวลา ${targetBoss.thaiName} แล้ว`);
-
-    try {
-      await fetch('/api/bosses/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ boss: updatedBoss }),
-      });
-    } catch (e) {
-      console.error('Failed to sync boss time:', e);
-    }
+    syncBossUpdate(updatedBoss);
   };
 
   // Full Edit save
   const handleSaveFullBoss = async (updatedBoss: Boss) => {
     setBosses((prev) => prev.map((b) => (b.id === updatedBoss.id ? updatedBoss : b)));
     showToast(`บันทึกข้อมูล ${updatedBoss.thaiName} แล้ว`);
-
-    try {
-      await fetch('/api/bosses/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ boss: updatedBoss }),
-      });
-    } catch (e) {
-      console.error('Failed to sync edit:', e);
-    }
+    syncBossUpdate(updatedBoss);
   };
 
   // Add new boss
@@ -669,16 +644,7 @@ export default function App() {
 
     setBosses((prev) => [bossWithServer, ...prev]);
     showToast(`เพิ่มบอส ${newBoss.thaiName} ใน ${bossWithServer.serverTag} สำเร็จ`);
-
-    try {
-      await fetch('/api/bosses/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ boss: bossWithServer }),
-      });
-    } catch (e) {
-      console.error('Failed to add boss:', e);
-    }
+    syncBossUpdate(bossWithServer);
   };
 
   // Pin toggle
@@ -688,16 +654,7 @@ export default function App() {
     const updated = { ...target, pinned: !target.pinned };
 
     setBosses((prev) => prev.map((b) => (b.id === bossId ? updated : b)));
-
-    try {
-      await fetch('/api/bosses/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ boss: updated }),
-      });
-    } catch {
-      // ignore
-    }
+    syncBossUpdate(updated);
   };
 
   // Reset all invasion bosses to --:--
@@ -716,11 +673,7 @@ export default function App() {
     });
     setBosses(updated);
     showToast('รีเซ็ตเวลาบอส Invasion ทั้งหมดเป็น --:-- เรียบร้อยแล้ว');
-    try {
-      await fetch('/api/bosses/reset-invasion', { method: 'POST' });
-    } catch (e) {
-      console.error('Failed to reset invasion:', e);
-    }
+    syncAllBosses(updated);
   };
 
   // Reboot Server Apply
@@ -830,6 +783,23 @@ export default function App() {
   // Count bosses in each server
   const mainCount = useMemo(() => bosses.filter((b) => b.server !== 'invasion').length, [bosses]);
   const invasionCount = useMemo(() => bosses.filter((b) => b.server === 'invasion').length, [bosses]);
+
+  // Share link to friends for synchronized realtime tracking
+  const handleShareLink = () => {
+    const shareUrl = window.location.href;
+    if (navigator.clipboard) {
+      navigator.clipboard
+        .writeText(shareUrl)
+        .then(() => {
+          showToast('📋 คัดลอกลิงก์แชร์แล้ว! ส่งลิงก์นี้ให้เพื่อนในกิลด์ ข้อมูลจะซิงค์ตรงกันทุกคนแบบเรียลไทม์');
+        })
+        .catch(() => {
+          showToast(`🔗 ลิงก์ของคุณคือ: ${shareUrl}`);
+        });
+    } else {
+      showToast(`🔗 ลิงก์ของคุณคือ: ${shareUrl}`);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#070d19] text-slate-100 flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200">
@@ -983,6 +953,17 @@ export default function App() {
             >
               <RotateCw className="w-3.5 h-3.5 text-cyan-400 stroke-[2.5]" />
               <span>รีบูทเซิร์ฟเวอร์</span>
+            </button>
+
+            {/* Share to Friends (Real-time synchronized data) */}
+            <button
+              type="button"
+              onClick={handleShareLink}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-500/70 text-emerald-300 text-xs font-bold transition-all shadow-sm cursor-pointer"
+              title="คัดลอกลิงก์แชร์ให้เพื่อนในกิลด์ ข้อมูลบอสจะซิงค์ตรงกันทุกคนแบบเรียลไทม์"
+            >
+              <Share2 className="w-3.5 h-3.5 text-emerald-400 stroke-[2.5]" />
+              <span>แชร์ให้เพื่อน</span>
             </button>
 
             {/* Add Boss */}
