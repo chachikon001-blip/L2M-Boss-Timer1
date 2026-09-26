@@ -1,0 +1,7 @@
+{
+  "name": "Lineage 2M Boss Timer & Tracker",
+  "description": "ระบบจับเวลาและแจ้งเตือนบอส MMORPG เรียลไทม์ พร้อมเสียงเตือนภาษาไทย ตารางเกิด และคัดลอกลงแคลน LINE / Discord",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
