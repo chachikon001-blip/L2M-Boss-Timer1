@@ -14,6 +14,7 @@ import { VoiceSettingsModal } from './components/VoiceSettingsModal';
 import { soundManager } from './utils/audio';
 import { getBossStatus } from './utils/format';
 import { db } from './firebase';
+import { ref, onValue, set } from "firebase/database";
 import { Swords, Clock, Table, LayoutGrid, Volume2, VolumeX, Bell, RotateCw, Plus, Search, Star, Calendar, Castle, Globe, CheckCircle2, Settings2, Check, Share2 } from 'lucide-react';
 const DEFAULT_DISCORD_SETTINGS: DiscordSettings = {
   enabled: false,
@@ -54,7 +55,32 @@ export default function App() {
   const [now, setNow] = useState<number>(Date.now());
   const [bosses, setBosses] = useState<Boss[]>(INITIAL_BOSSES);
   const [activities, setActivities] = useState<GuildActivity[]>(DEFAULT_ACTIVITIES);
+// เพิ่ม useEffect สำหรับเชื่อมต่อและรับฟังข้อมูล Firebase Real-time
+  // เพิ่ม useEffect สำหรับเชื่อมต่อและรับฟังข้อมูล Firebase Real-time
+  useEffect(() => {
+    const bossesRef = ref(db, 'bosses');
+    
+    const unsubscribe = onValue(bossesRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        // ตรวจสอบและแปลงข้อมูลจาก Firebase ให้เป็น Array เสมอ (รองรับทั้ง Object และ Array เก่า)
+        if (Array.isArray(data)) {
+          setBosses(data.filter(Boolean));
+        } else {
+          setBosses(Object.values(data));
+        }
+      } else {
+        // ถ้าบน Firebase ว่างเปล่า ให้สร้างโครงสร้าง Object ตาม ID บอส ส่งขึ้นไป
+        const bossesObj: Record<string, any> = {};
+        INITIAL_BOSSES.forEach((b) => {
+          bossesObj[b.id] = b;
+        });
+        setBosses(INITIAL_BOSSES);
+      }
+    });
 
+    return () => unsubscribe();
+  }, []);
   // Filters & Views
   const [serverFilter, setServerFilter] = useState<ServerFilterType>('all'); // 'all' | 'main' | 'invasion'
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
@@ -508,15 +534,30 @@ export default function App() {
       notifiedStages: {},
     };
 
-    setBosses((prev) => prev.map((b) => (b.id === bossId ? updatedBoss : b)));
+  // แปลงข้อมูลเป็น Object (Key-Value) ตาม ID บอส ป้องกันปัญหารีเฟรชแล้วเวลาหาย
+    setBosses((prev) => {
+      const newBosses = prev.map((b) => (b.id === bossId ? updatedBoss : b));
+      
+      const bossesObj: Record<string, any> = {};
+      newBosses.forEach((b) => {
+        bossesObj[b.id] = b;
+      });
+      
+      // ส่งข้อมูลรูปแบบ Object ขึ้น Firebase ทันที
+      set(ref(db, 'bosses'), bossesObj);
+
+      return newBosses;
+    });
+
     if (isOverMidnight) {
-      showToast(`🔄 อัปเดต ${targetBoss.thaiName} แล้ว (รอบเกิดใหม่เกิน 00:00 จึงรีเซ็ตเป็น --:--)`);
+      showToast(`⚠️ อัปเดต ${targetBoss.thaiName} แล้ว (รอบเกิดใหม่เกิน 00:00 จึงรีเซ็ตเป็น --:--)`);
     } else {
       showToast(`🔄 อัปเดตรอบเกิด ${targetBoss.thaiName} แล้ว (+${targetBoss.cooldownHours} ชม.)`);
     }
 
     syncBossUpdate(updatedBoss);
   };
+   
 
   // Direct change respawn time from main page
   const handleDirectChangeTime = async (bossId: string, timeString: string) => {
